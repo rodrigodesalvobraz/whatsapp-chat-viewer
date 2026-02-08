@@ -1,0 +1,7 @@
+# Microsoft Word documents
+*.doc
+*.docx
+
+# Ignore all subdirectories (except sample/)
+*/
+!sample/
