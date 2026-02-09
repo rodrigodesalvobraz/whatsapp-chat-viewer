@@ -96,7 +96,7 @@ To generate the HTML yourself:
 python whatsapp_viewer.py --dir sample --me Bob
 ```
 
-Or browse the pre-generated output directly:
+Or browse the pre-generated output directly (live rendered):
 
-- [output.html](sample/output.html) — with transcriptions shown below audio messages
-- [output-without-transcription.html](sample/output-without-transcription.html) — without transcriptions
+- [With transcriptions](https://rodrigodesalvobraz.github.io/whatsapp-chat-viewer/sample/output.html)
+- [Without transcriptions](https://rodrigodesalvobraz.github.io/whatsapp-chat-viewer/sample/output-without-transcription.html)
