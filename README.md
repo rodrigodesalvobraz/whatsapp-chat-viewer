@@ -1,6 +1,6 @@
 # WhatsApp Chat Viewer
 
-Generates a WhatsApp-style HTML page from an exported WhatsApp chat, with support for images, videos, audio, PDFs, and optional audio transcription.
+WhatsApp's built-in chat export produces a plain text file and a folder of loose media files, which is hard to read and navigate. This tool generates a clean, browsable HTML page from that export, with embedded images, videos, audio players, PDFs, and optional audio transcription.
 
 ![Screenshot](sample/screenshot.png)
 
