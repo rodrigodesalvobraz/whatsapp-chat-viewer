@@ -6,6 +6,12 @@ from html import escape
 from datetime import datetime
 
 AUDIO_EXTS = ("opus", "ogg", "mp3", "wav", "m4a")
+IMAGE_EXTS = ("jpg", "jpeg", "png", "gif", "webp")
+
+_LANG_NAMES = {
+    "pt": "Portuguese", "en": "English", "es": "Spanish",
+    "fr": "French", "de": "German", "it": "Italian",
+}
 
 # E.g.: "20/06/2025, 23:29 - John: Message"
 MESSAGE_RE = re.compile(
@@ -338,21 +344,240 @@ def correct_transcriptions(messages, media_dir, media_index, llm_model, limit,
     print(f"{corrected} transcriptions corrected ({count} considered).")
 
 
+def describe_pdf(pdf_path, context, pdf_model, client, language="en"):
+    """Generate a one-paragraph description of a PDF using LLM.
+
+    Tries text extraction first (fast, cheap). Falls back to vision (page
+    images) for scanned or image-only PDFs.
+    """
+    import fitz  # pymupdf
+    import base64
+
+    doc = fitz.open(pdf_path)
+
+    full_text = ""
+    for page in doc:
+        full_text += page.get_text()
+
+    lang_name = _LANG_NAMES.get(language, language)
+    system_prompt = (
+        "You are a document analyst. You receive a document and recent conversation "
+        "context. Write a single paragraph (3-5 sentences) summarizing the document's "
+        "key information, focusing on what is most relevant given the conversation "
+        f"context. Be factual and concise. Always write in {lang_name}. "
+        "Output only the paragraph, nothing else."
+    )
+
+    if len(full_text.strip()) > 100:
+        # Text-based PDF: send extracted text
+        response = client.chat.completions.create(
+            model=pdf_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Recent conversation context:\n---\n{context}\n---\n\n"
+                        f"Document content:\n{full_text[:4000]}"
+                    ),
+                },
+            ],
+        )
+    else:
+        # Scanned/image PDF: render pages and use vision
+        content = []
+        for page_num in range(min(len(doc), 4)):
+            page = doc[page_num]
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+            img_b64 = base64.b64encode(pix.tobytes("png")).decode()
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{img_b64}"},
+            })
+        content.append({
+            "type": "text",
+            "text": (
+                f"Recent conversation context:\n---\n{context}\n---\n\n"
+                "Describe this document in one paragraph."
+            ),
+        })
+        response = client.chat.completions.create(
+            model=pdf_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": content},
+            ],
+        )
+
+    doc.close()
+    return response.choices[0].message.content.strip()
+
+
+def describe_pdfs(messages, media_dir, media_index, pdf_model, limit, language="en"):
+    """Generate and cache one-paragraph descriptions for all PDF files in the chat."""
+    from openai import OpenAI
+    client = OpenAI()
+    output_dir = os.path.dirname(os.path.abspath(
+        os.path.join(media_dir, "output.html")
+    )) or "."
+    context_lines = []
+    count = 0
+    described = 0
+    for msg in messages:
+        if limit is not None and count >= limit:
+            break
+        text = (msg["text"] or "").lower()
+        sender = msg["sender"] or ""
+        found_pdf = False
+        for fname_lower, rel_path in media_index.items():
+            if fname_lower not in text:
+                continue
+            if fname_lower.rsplit(".", 1)[-1] != "pdf":
+                continue
+            full_path = os.path.normpath(os.path.join(output_dir, rel_path))
+            if not os.path.isfile(full_path):
+                continue
+            count += 1
+            if limit is not None and count > limit:
+                break
+            found_pdf = True
+            desc_path = full_path + ".txt"
+            if os.path.isfile(desc_path):
+                continue
+            context = "\n".join(context_lines[-20:])
+            print(f"  Describing ({count}): {os.path.basename(full_path)}...")
+            try:
+                desc = describe_pdf(full_path, context, pdf_model, client, language)
+                with open(desc_path, "w", encoding="utf-8") as f:
+                    f.write(desc)
+                described += 1
+            except Exception as e:
+                print(f"    ERROR describing {os.path.basename(full_path)}: {e}")
+        if not found_pdf:
+            msg_text = msg["text"] or ""
+            if msg_text.strip():
+                context_lines.append(f"{sender}: {msg_text}")
+    print(f"{described} PDFs described ({count} considered).")
+
+
+def describe_image(image_path, context, image_model, client, language="en"):
+    """Generate a one-paragraph description of an image using vision LLM."""
+    import base64
+
+    ext = image_path.lower().rsplit(".", 1)[-1]
+    mime = "image/jpeg" if ext in ("jpg", "jpeg") else f"image/{ext}"
+
+    with open(image_path, "rb") as f:
+        img_b64 = base64.b64encode(f.read()).decode()
+
+    lang_name = _LANG_NAMES.get(language, language)
+    response = client.chat.completions.create(
+        model=image_model,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are an image analyst. You receive an image and recent conversation "
+                    "context. Write a single paragraph (3-5 sentences) describing the image's "
+                    "key content, focusing on what is most relevant given the conversation "
+                    "context. If the image contains a document, form, or text, extract the "
+                    f"most important information from it. Be factual and concise. "
+                    f"Always write in {lang_name}. "
+                    "Output only the paragraph, nothing else."
+                ),
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime};base64,{img_b64}"},
+                    },
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Recent conversation context:\n---\n{context}\n---\n\n"
+                            "Describe this image in one paragraph."
+                        ),
+                    },
+                ],
+            },
+        ],
+    )
+    return response.choices[0].message.content.strip()
+
+
+def describe_images(messages, media_dir, media_index, image_model, limit, language="en"):
+    """Generate and cache one-paragraph descriptions for all images in the chat."""
+    from openai import OpenAI
+    client = OpenAI()
+    output_dir = os.path.dirname(os.path.abspath(
+        os.path.join(media_dir, "output.html")
+    )) or "."
+    context_lines = []
+    count = 0
+    described = 0
+    for msg in messages:
+        if limit is not None and count >= limit:
+            break
+        text = (msg["text"] or "").lower()
+        sender = msg["sender"] or ""
+        found_image = False
+        for fname_lower, rel_path in media_index.items():
+            if fname_lower not in text:
+                continue
+            if fname_lower.rsplit(".", 1)[-1] not in IMAGE_EXTS:
+                continue
+            full_path = os.path.normpath(os.path.join(output_dir, rel_path))
+            if not os.path.isfile(full_path):
+                continue
+            count += 1
+            if limit is not None and count > limit:
+                break
+            found_image = True
+            desc_path = full_path + ".txt"
+            if os.path.isfile(desc_path):
+                continue
+            context = "\n".join(context_lines[-20:])
+            print(f"  Describing ({count}): {os.path.basename(full_path)}...")
+            try:
+                desc = describe_image(full_path, context, image_model, client, language)
+                with open(desc_path, "w", encoding="utf-8") as f:
+                    f.write(desc)
+                described += 1
+            except Exception as e:
+                print(f"    ERROR describing {os.path.basename(full_path)}: {e}")
+        if not found_image:
+            msg_text = msg["text"] or ""
+            if msg_text.strip():
+                context_lines.append(f"{sender}: {msg_text}")
+    print(f"{described} images described ({count} considered).")
+
+
 def load_transcriptions(media_dir, media_index, output_html_path):
     output_dir = os.path.dirname(os.path.abspath(output_html_path)) or "."
     transcriptions = {}
+
     for fname_lower, rel_path in media_index.items():
         ext = fname_lower.rsplit(".", 1)[-1]
-        if ext not in AUDIO_EXTS:
-            continue
-        full_path = os.path.normpath(os.path.join(output_dir, rel_path))
-        # Prefer corrected (.txt) over original (.original.txt)
-        corrected = full_path + ".txt"
-        original = full_path + ".original.txt"
-        txt_path = corrected if os.path.isfile(corrected) else original
-        if os.path.isfile(txt_path):
-            with open(txt_path, "r", encoding="utf-8") as f:
-                transcriptions[fname_lower] = f.read().strip()
+
+        if ext in AUDIO_EXTS:
+            full_path = os.path.normpath(os.path.join(output_dir, rel_path))
+            # Prefer corrected (.txt) over original (.original.txt)
+            corrected = full_path + ".txt"
+            original = full_path + ".original.txt"
+            txt_path = corrected if os.path.isfile(corrected) else original
+            if os.path.isfile(txt_path):
+                with open(txt_path, "r", encoding="utf-8") as f:
+                    transcriptions[fname_lower] = f.read().strip()
+
+        elif ext == "pdf" or ext in IMAGE_EXTS:
+            full_path = os.path.normpath(os.path.join(output_dir, rel_path))
+            desc_path = full_path + ".txt"
+            if os.path.isfile(desc_path):
+                with open(desc_path, "r", encoding="utf-8") as f:
+                    transcriptions[fname_lower] = f.read().strip()
+
     return transcriptions
 
 
@@ -393,11 +618,15 @@ def render_message_html(msg, media_index, sender_classes, transcriptions=None):
             src = escape(rel_path)
 
             if media_type == "image":
+                desc_html = ""
+                if transcriptions and fname_lower in transcriptions:
+                    desc_html = f'<div class="transcription">{escape(transcriptions[fname_lower])}</div>'
                 parts.append(
                     f'<div class="media">'
                     f'  <a href="{src}" target="_blank">'
                     f'    <img src="{src}" loading="lazy" />'
                     f'  </a>'
+                    f'{desc_html}'
                     f'</div>'
                 )
             elif media_type == "video":
@@ -417,12 +646,16 @@ def render_message_html(msg, media_index, sender_classes, transcriptions=None):
                     f'{transcription_html}</div>'
                 )
             elif media_type == "pdf":
+                desc_html = ""
+                if transcriptions and fname_lower in transcriptions:
+                    desc_html = f'<div class="transcription">{escape(transcriptions[fname_lower])}</div>'
                 parts.append(
                     f'<div class="media pdf">'
                     f'<a href="{src}" target="_blank">'
                     f'  <div class="pdf-thumb">📄</div>'
                     f'  <div class="pdf-name">{escape(filename)}</div>'
                     f'</a>'
+                    f'{desc_html}'
                     f'</div>'
                 )
             else:
@@ -711,6 +944,32 @@ Examples:
         default="gpt-4o-mini",
         help="LLM model for transcription correction (default: gpt-4o-mini)",
     )
+    parser.add_argument(
+        "--describe-pdfs",
+        action="store_true",
+        default=False,
+        dest="describe_pdfs",
+        help="Generate one-paragraph descriptions for PDF files using OpenAI API (requires OPENAI_API_KEY)",
+    )
+    parser.add_argument(
+        "--pdf-model",
+        dest="pdf_model",
+        default="gpt-4o",
+        help="Model for PDF description (default: gpt-4o; supports vision for scanned PDFs)",
+    )
+    parser.add_argument(
+        "--describe-images",
+        action="store_true",
+        default=False,
+        dest="describe_images",
+        help="Generate one-paragraph descriptions for image files using OpenAI vision API (requires OPENAI_API_KEY)",
+    )
+    parser.add_argument(
+        "--image-model",
+        dest="image_model",
+        default="gpt-4o",
+        help="Model for image description (default: gpt-4o)",
+    )
     args = parser.parse_args()
 
     # Apply base directory if specified
@@ -739,10 +998,14 @@ Examples:
         media_index = {}
         print("WARNING: media directory not found; generating text only.")
 
-    if args.transcribe:
+    if args.transcribe or args.describe_pdfs or args.describe_images:
         print("Detecting language...")
         language = detect_language(messages)
         print(f"Detected language: {language}")
+    else:
+        language = "en"
+
+    if args.transcribe:
         print(f"Transcribing audios (model: {args.stt_model})...")
         transcribe_audios(
             messages, args.media_dir, media_index,
@@ -757,9 +1020,23 @@ Examples:
             interactive=args.correct_interactive,
         )
 
+    if args.describe_pdfs:
+        print(f"Describing PDFs (model: {args.pdf_model})...")
+        describe_pdfs(
+            messages, args.media_dir, media_index,
+            args.pdf_model, args.transcribe_limit, language,
+        )
+
+    if args.describe_images:
+        print(f"Describing images (model: {args.image_model})...")
+        describe_images(
+            messages, args.media_dir, media_index,
+            args.image_model, args.transcribe_limit, language,
+        )
+
     transcriptions = load_transcriptions(args.media_dir, media_index, args.output_html)
     if transcriptions:
-        print(f"{len(transcriptions)} transcriptions loaded.")
+        print(f"{len(transcriptions)} transcriptions/descriptions loaded.")
 
     print("Generating HTML...")
     generate_html(messages, media_index, args.output_html,

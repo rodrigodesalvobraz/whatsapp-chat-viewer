@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.0 — 2026-03-10
+
+### Features
+- PDF descriptions: generate a one-paragraph summary of each PDF file using OpenAI API (`--describe-pdfs`)
+- Image descriptions: generate a one-paragraph summary of each image using OpenAI vision API (`--describe-images`), useful for photos of documents
+- Descriptions are displayed inline below the media (PDF link or image), matching the style of audio transcriptions
+- Context-aware: the last 20 conversation messages are passed to the model so it can focus on the most relevant information
+- Handles both text-based PDFs (text extraction) and scanned/image PDFs (vision API with page rendering)
+- Descriptions are cached as `.txt` files next to each file — re-running skips already-described files
+- Configurable models via `--pdf-model` and `--image-model` (both default to `gpt-4o`)
+
 ## 1.0.0 — 2025-06-21
 
 Initial public release.

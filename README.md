@@ -1,6 +1,6 @@
 # WhatsApp Chat Viewer
 
-WhatsApp's built-in chat export produces a plain text file and a folder of loose media files, which is hard to read and navigate. This tool generates a clean, browsable HTML page from that export, with embedded images, videos, audio players, PDFs, and optional audio transcription.
+WhatsApp's built-in chat export produces a plain text file and a folder of loose media files, which is hard to read and navigate. This tool generates a clean, browsable HTML page from that export, with embedded images, videos, audio players, PDFs, and optional audio transcriptions, and image and PDF descriptions. These latter elements are particularly useful for search and automatic processing of long conversations.
 
 ![Screenshot](sample/screenshot.png)
 
@@ -10,7 +10,7 @@ WhatsApp's built-in chat export produces a plain text file and a folder of loose
 pip install -r requirements.txt
 ```
 
-For audio transcription, set your OpenAI API key:
+For audio transcription, image descriptions, and PDF descriptions, set your OpenAI API key:
 
 ```
 # Linux/macOS
@@ -70,6 +70,30 @@ python whatsapp_viewer.py "chat.txt" --dir "path/to/folder" --correct-interactiv
 
 Corrected transcriptions are saved as `.txt` files. The original `.original.txt` files are preserved. The HTML output uses corrected versions when available.
 
+### PDF descriptions
+
+Generate a one-paragraph description for each PDF in the chat:
+
+```
+python whatsapp_viewer.py "chat.txt" --dir "path/to/folder" --describe-pdfs
+```
+
+Descriptions are displayed inline below the PDF link in the HTML output. The model uses the surrounding conversation context to focus on the most relevant information. Both text-based and scanned (image-only) PDFs are supported — scanned PDFs are rendered as images and processed with vision.
+
+Descriptions are cached as `.pdf.txt` files next to each PDF. Re-running skips already-described files.
+
+### Image descriptions
+
+Generate a one-paragraph description for each image in the chat:
+
+```
+python whatsapp_viewer.py "chat.txt" --dir "path/to/folder" --describe-images
+```
+
+Descriptions are displayed inline below each image. Useful when images are photos of documents, receipts, or other important materials. The model uses the surrounding conversation context to highlight the most relevant information.
+
+Descriptions are cached as `.img.txt` files next to each image. Re-running skips already-described files.
+
 ### All options
 
 | Argument | Description |
@@ -80,11 +104,15 @@ Corrected transcriptions are saved as `.txt` files. The original `.original.txt`
 | `--dir DIR` | Base directory for all files |
 | `--me NAME` | Your name in the chat (right-aligns your messages) |
 | `--transcribe` | Transcribe audio files using OpenAI API |
-| `--transcribe-only-x-audios N` | Limit to first N audios |
+| `--transcribe-only-x-audios N` | Limit to first N audios/PDFs |
 | `--stt-model MODEL` | Speech-to-text model (default: `gpt-4o-mini-transcribe`) |
 | `--correct` | Correct transcriptions using LLM with conversation context |
 | `--correct-interactive` | Interactively review each correction |
 | `--llm-model MODEL` | LLM model for correction (default: `gpt-4o-mini`) |
+| `--describe-pdfs` | Generate one-paragraph descriptions for PDF files |
+| `--pdf-model MODEL` | Model for PDF description (default: `gpt-4o`) |
+| `--describe-images` | Generate one-paragraph descriptions for image files |
+| `--image-model MODEL` | Model for image description (default: `gpt-4o`) |
 
 ## Demo
 
