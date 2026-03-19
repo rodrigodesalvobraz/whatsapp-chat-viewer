@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.1 — 2026-03-19
+
+### Fixes
+- Added stable per-message anchor ids and permalink links in generated chat HTML
+- Fixed hash-based navigation so deep links to messages scroll reliably when opening `output.html#msg-...`
+- Improved image and PDF description language handling by detecting the predominant language from chat and document text
+- For scanned PDFs and images, the vision prompt now instructs the model to infer the document language first and fall back to the chat language only when needed
+
 ## 1.1.0 — 2026-03-10
 
 ### Features

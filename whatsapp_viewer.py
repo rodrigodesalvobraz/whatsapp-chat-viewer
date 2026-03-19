@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import os
 import re
 from html import escape
@@ -12,6 +13,8 @@ _LANG_NAMES = {
     "pt": "Portuguese", "en": "English", "es": "Spanish",
     "fr": "French", "de": "German", "it": "Italian",
 }
+
+SUPPORTED_LANGS = set(_LANG_NAMES.keys())
 
 # E.g.: "20/06/2025, 23:29 - John: Message"
 MESSAGE_RE = re.compile(
@@ -147,20 +150,41 @@ def build_sender_classes(messages, me_name=None):
     return sender_classes
 
 
-def detect_language(messages):
+def detect_language_from_text(text, fallback="pt"):
     from langdetect import detect
+
+    if not text:
+        return fallback
+
+    sample = " ".join(
+        chunk.strip()
+        for chunk in re.split(r"\s+", text)
+        if chunk.strip()
+    )
+    if len(sample) < 20:
+        return fallback
+
+    try:
+        detected = detect(sample)
+    except Exception:
+        return fallback
+
+    return detected if detected in SUPPORTED_LANGS else fallback
+
+
+def detect_language(messages):
     texts = []
-    for msg in messages[:50]:
-        t = msg["text"].strip()
-        if t and len(t) > 10:
+    for msg in messages:
+        t = (msg["text"] or "").strip()
+        if len(t) >= 20:
             texts.append(t)
+        if len(" ".join(texts)) >= 4000:
+            break
+
     if not texts:
         return "pt"
-    sample = " ".join(texts)
-    try:
-        return detect(sample)
-    except Exception:
-        return "pt"
+
+    return detect_language_from_text("\n".join(texts), fallback="pt")
 
 
 def transcribe(audio_path, model, language, client):
@@ -359,16 +383,16 @@ def describe_pdf(pdf_path, context, pdf_model, client, language="en"):
     for page in doc:
         full_text += page.get_text()
 
-    lang_name = _LANG_NAMES.get(language, language)
-    system_prompt = (
-        "You are a document analyst. You receive a document and recent conversation "
-        "context. Write a single paragraph (3-5 sentences) summarizing the document's "
-        "key information, focusing on what is most relevant given the conversation "
-        f"context. Be factual and concise. Always write in {lang_name}. "
-        "Output only the paragraph, nothing else."
-    )
-
     if len(full_text.strip()) > 100:
+        detected_language = detect_language_from_text(full_text, fallback=language)
+        lang_name = _LANG_NAMES.get(detected_language, detected_language)
+        system_prompt = (
+            "You are a document analyst. You receive a document and recent conversation "
+            "context. Write a single paragraph (3-5 sentences) summarizing the document's "
+            "key information, focusing on what is most relevant given the conversation "
+            f"context. Be factual and concise. Always write in {lang_name}. "
+            "Output only the paragraph, nothing else."
+        )
         # Text-based PDF: send extracted text
         response = client.chat.completions.create(
             model=pdf_model,
@@ -384,11 +408,25 @@ def describe_pdf(pdf_path, context, pdf_model, client, language="en"):
             ],
         )
     else:
+        fallback_lang_name = _LANG_NAMES.get(language, language)
+        system_prompt = (
+            "You are a document analyst. You receive a document and recent conversation "
+            "context. First infer the predominant language of the document from any visible "
+            "text. If the document language is unclear, fall back to the conversation language. "
+            "Write a single paragraph (3-5 sentences) summarizing the document's key "
+            "information, focusing on what is most relevant given the conversation context. "
+            f"If fallback is needed, use {fallback_lang_name}. Be factual and concise. "
+            "Output only the paragraph, nothing else."
+        )
         # Scanned/image PDF: render pages and use vision
         content = []
         for page_num in range(min(len(doc), 4)):
             page = doc[page_num]
-            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+            # Scale so the longest dimension is at most 1500px to stay within API limits
+            rect = page.rect
+            max_dim = max(rect.width, rect.height)
+            scale = min(2.0, 1500 / max_dim) if max_dim > 0 else 1.0
+            pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale))
             img_b64 = base64.b64encode(pix.tobytes("png")).decode()
             content.append({
                 "type": "image_url",
@@ -480,9 +518,11 @@ def describe_image(image_path, context, image_model, client, language="en"):
                     "You are an image analyst. You receive an image and recent conversation "
                     "context. Write a single paragraph (3-5 sentences) describing the image's "
                     "key content, focusing on what is most relevant given the conversation "
-                    "context. If the image contains a document, form, or text, extract the "
-                    f"most important information from it. Be factual and concise. "
-                    f"Always write in {lang_name}. "
+                    "context. If the image contains a document, form, or text, first infer the "
+                    "predominant language from the visible text and write in that language. If "
+                    "the image language is unclear or there is no visible text, fall back to the "
+                    f"conversation language, which is {lang_name}. Extract the most important "
+                    "information from the image when relevant. Be factual and concise. "
                     "Output only the paragraph, nothing else."
                 ),
             },
@@ -581,7 +621,36 @@ def load_transcriptions(media_dir, media_index, output_html_path):
     return transcriptions
 
 
-def render_message_html(msg, media_index, sender_classes, transcriptions=None):
+def build_message_ids(messages):
+    """
+    Build stable DOM ids for each message based on a content hash.
+
+    Duplicate messages with the exact same canonical content get a numeric suffix
+    to keep ids unique within the document.
+    """
+    ids = []
+    seen = {}
+
+    for msg in messages:
+        canonical = "\n".join([
+            msg.get("date", ""),
+            msg.get("time", ""),
+            msg.get("sender", ""),
+            msg.get("text", ""),
+        ])
+        digest = hashlib.sha1(canonical.encode("utf-8")).hexdigest()[:12]
+        seen[digest] = seen.get(digest, 0) + 1
+
+        message_id = f"msg-{digest}"
+        if seen[digest] > 1:
+            message_id = f"{message_id}-{seen[digest]}"
+
+        ids.append(message_id)
+
+    return ids
+
+
+def render_message_html(msg, message_id, media_index, sender_classes, transcriptions=None):
     sender = msg["sender"]
     sender_class = sender_classes.get(sender, "received")
     text = msg["text"] or ""
@@ -684,11 +753,14 @@ def render_message_html(msg, media_index, sender_classes, transcriptions=None):
     timestamp = f"{escape(msg['date'])} {escape(msg['time'])}".strip()
 
     return f"""
-    <div class="message {sender_class}">
+    <div class="message {sender_class}" id="{message_id}">
         <div class="bubble">
             <div class="meta">
                 <span class="sender">{escape(sender) if sender else "System"}</span>
-                <span class="time">{timestamp}</span>
+                <span class="meta-right">
+                    <span class="time">{timestamp}</span>
+                    <a class="permalink" href="#{message_id}" title="Link to this message">#</a>
+                </span>
             </div>
             <div class="text">
                 {content_html}
@@ -700,6 +772,7 @@ def render_message_html(msg, media_index, sender_classes, transcriptions=None):
 
 def generate_html(messages, media_index, output_path, me_name=None, transcriptions=None):
     sender_classes = build_sender_classes(messages, me_name=me_name)
+    message_ids = build_message_ids(messages)
 
     css = """
     body {
@@ -710,9 +783,7 @@ def generate_html(messages, media_index, output_path, me_name=None, transcriptio
     .chat-container {
         max-width: 800px;
         margin: 0 auto;
-        height: 100vh;
-        display: flex;
-        flex-direction: column;
+        min-height: 100vh;
     }
     .chat-header {
         background: #075E54;
@@ -722,19 +793,21 @@ def generate_html(messages, media_index, output_path, me_name=None, transcriptio
         display: flex;
         align-items: center;
         gap: 8px;
+        position: sticky;
+        top: 0;
+        z-index: 10;
     }
     .chat-header .title {
         font-size: 16px;
     }
     .chat-body {
-        flex: 1;
         padding: 10px;
-        overflow-y: auto;
         background: #ece5dd;
     }
     .message {
         display: flex;
         margin-bottom: 6px;
+        scroll-margin-top: 72px;
     }
     .message.sent {
         justify-content: flex-end;
@@ -757,13 +830,33 @@ def generate_html(messages, media_index, output_path, me_name=None, transcriptio
     .meta {
         display: flex;
         justify-content: space-between;
+        align-items: center;
         font-size: 11px;
         color: #667781;
         margin-bottom: 4px;
     }
+    .meta-right {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .permalink {
+        color: inherit;
+        text-decoration: none;
+        opacity: 0.45;
+        font-weight: 600;
+    }
+    .message:hover .permalink,
+    .message:target .permalink {
+        opacity: 1;
+    }
     .text span {
         white-space: pre-wrap;
         word-wrap: break-word;
+    }
+    .message:target .bubble {
+        outline: 2px solid rgba(7, 94, 84, 0.35);
+        box-shadow: 0 0 0 4px rgba(7, 94, 84, 0.12);
     }
     .media {
         margin-top: 4px;
@@ -814,8 +907,8 @@ def generate_html(messages, media_index, output_path, me_name=None, transcriptio
     """
 
     messages_html = [
-        render_message_html(msg, media_index, sender_classes, transcriptions)
-        for msg in messages
+        render_message_html(msg, message_id, media_index, sender_classes, transcriptions)
+        for msg, message_id in zip(messages, message_ids)
     ]
     body_html = "\n".join(messages_html)
 
@@ -841,6 +934,26 @@ def generate_html(messages, media_index, output_path, me_name=None, transcriptio
         </div>
     </div>
     <script>
+    function scrollToHashTarget() {{
+        if (!window.location.hash) {{
+            return;
+        }}
+        var id = decodeURIComponent(window.location.hash.slice(1));
+        if (!id) {{
+            return;
+        }}
+        var target = document.getElementById(id);
+        if (target) {{
+            target.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+        }}
+    }}
+
+    window.addEventListener('DOMContentLoaded', function() {{
+        setTimeout(scrollToHashTarget, 0);
+    }});
+
+    window.addEventListener('hashchange', scrollToHashTarget);
+
     document.addEventListener('play', function(e) {{
         var audios = document.querySelectorAll('audio, video');
         for (var i = 0; i < audios.length; i++) {{
