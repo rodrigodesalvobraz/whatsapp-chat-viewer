@@ -38,6 +38,16 @@ python whatsapp_viewer.py "my_chat.txt" --dir "path/to/folder" --me "YourName"
 
 The `--me` flag aligns your messages to the right.
 
+### Message permalinks
+
+Each rendered message gets a stable anchor id based on a hash of its date, time, sender, and text content. This lets you link directly to a specific message with a URL such as:
+
+```
+output.html#msg-1a2b3c4d5e6f
+```
+
+If two messages have identical content, the viewer appends a numeric suffix to keep the ids unique.
+
 ### Audio transcription
 
 Transcribe all audio files using OpenAI's speech-to-text API:
