@@ -16,14 +16,28 @@ _LANG_NAMES = {
 
 SUPPORTED_LANGS = set(_LANG_NAMES.keys())
 
-# E.g.: "20/06/2025, 23:29 - John: Message"
+# Supported WhatsApp export formats:
+#   "20/06/2025, 23:29 - John: Message"                         (Android classic)
+#   "6/15/2025, 9:15 AM - Alice: Hey"                           (Android 12h)
+#   "[20/06/2025, 23:29:45] John: Message"                      (iOS/Web)
+#   "[20/06/2025, 4:13:35 PM] John: Message"                    (iOS/Web 12h)
+#   "‎[20/06/2025, 4:13:35 PM] John: Message"                  (with LRM)
 MESSAGE_RE = re.compile(
-    r"^(\d{1,2}/\d{1,2}/\d{2,4}),?\s+(\d{1,2}:\d{2}(?:\s?[APMapm]{2})?)\s+-\s+(.*?):\s+(.*)"
+    r"^[\u200E\u200F]?\[?"
+    r"(\d{1,2}/\d{1,2}/\d{2,4}),\s+"
+    r"(\d{1,2}:\d{2}(?::\d{2})?(?:\s?[\u202F]?\s?[APap][Mm])?)"
+    r"\]?\s*(?:-\s+)?"
+    r"(.*?):\s+(.*)"
 )
 
-# E.g.: "20/06/2025, 23:29 - Messages and calls are end-to-end encrypted."
+# System message (same format, no sender):
+#   "20/06/2025, 23:29 - Messages and calls are end-to-end encrypted."
 SYSTEM_RE = re.compile(
-    r"^(\d{1,2}/\d{1,2}/\d{2,4}),?\s+(\d{1,2}:\d{2}(?:\s?[APMapm]{2})?)\s+-\s+(.*)"
+    r"^[\u200E\u200F]?\[?"
+    r"(\d{1,2}/\d{1,2}/\d{2,4}),\s+"
+    r"(\d{1,2}:\d{2}(?::\d{2})?(?:\s?[\u202F]?\s?[APap][Mm])?)"
+    r"\]?\s*(?:-\s+)?"
+    r"(.*)"
 )
 
 # Media/file extensions we handle
