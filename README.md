@@ -1,8 +1,17 @@
 # WhatsApp Chat Viewer
 
+> Forked from [rodrigodesalvobraz/whatsapp-chat-viewer](https://github.com/rodrigodesalvobraz/whatsapp-chat-viewer) with added support for iOS chat exports, system vs. regular message differentiation, sticky date badges, and bottom-right message timestamps.
+
 WhatsApp's built-in chat export produces a plain text file and a folder of loose media files, which is hard to read and navigate. This tool generates a clean, browsable HTML page from that export, with embedded images, videos, audio players, PDFs, and optional audio transcriptions, and image and PDF descriptions. These latter elements are particularly useful for search and automatic processing of long conversations.
 
 ![Screenshot](sample/screenshot.png)
+
+## What's New in This Fork
+
+- **iOS Export Compatibility:** Supports iOS timestamp formatting (`[DD/MM/YYYY, HH:MM:SS] Sender: Message`), strips invisible Unicode directional characters (`\u200e`), and cleans `<attached: filename>` tags around media.
+- **System vs. Regular Message Differentiation:** Automatically detects iOS system notices (such as end-to-end encryption banners and security code changes, which iOS exports under a contact's name) and renders them as centered system alerts rather than regular chat bubbles.
+- **Sticky Date Badges:** Groups messages by day with centered, pill-style date headers (e.g., `10 Oct 2022`) that remain pinned below the top bar until the next day begins.
+- **Bottom-Right Timestamps:** Moves the message time to the bottom-right corner inside each regular chat bubble (while keeping it inline for system notices) for a closer match to WhatsApp's native layout.
 
 ## Setup
 
@@ -134,7 +143,7 @@ To generate the HTML yourself:
 python whatsapp_viewer.py --dir sample --me Bob
 ```
 
-Or browse the pre-generated output directly (live rendered):
+Or browse the original project's pre-generated output directly (live rendered):
 
 - [With transcriptions](https://rodrigodesalvobraz.github.io/whatsapp-chat-viewer/sample/output.html)
 - [Without transcriptions](https://rodrigodesalvobraz.github.io/whatsapp-chat-viewer/sample/output-without-transcription.html)
