@@ -16,14 +16,14 @@ _LANG_NAMES = {
 
 SUPPORTED_LANGS = set(_LANG_NAMES.keys())
 
-# E.g.: "20/06/2025, 23:29 - John: Message"
+# Supporta sia iOS "[GG/MM/AAAA, HH:MM:SS] Nome: Msg" sia Android "GG/MM/AAAA, HH:MM - Nome: Msg"
 MESSAGE_RE = re.compile(
-    r"^(\d{1,2}/\d{1,2}/\d{2,4}),?\s+(\d{1,2}:\d{2}(?:\s?[APMapm]{2})?)\s+-\s+(.*?):\s+(.*)"
+    r"^\[?(\d{1,2}/\d{1,2}/\d{2,4}),?\s+(\d{1,2}:\d{2}(?::\d{2})?(?:\s?[APMapm]{2})?)(?:\]\s+|\s+-\s+)(.*?):\s+(.*)"
 )
 
-# E.g.: "20/06/2025, 23:29 - Messages and calls are end-to-end encrypted."
+# Messaggi di sistema senza mittente
 SYSTEM_RE = re.compile(
-    r"^(\d{1,2}/\d{1,2}/\d{2,4}),?\s+(\d{1,2}:\d{2}(?:\s?[APMapm]{2})?)\s+-\s+(.*)"
+    r"^\[?(\d{1,2}/\d{1,2}/\d{2,4}),?\s+(\d{1,2}:\d{2}(?::\d{2})?(?:\s?[APMapm]{2})?)(?:\]\s+|\s+-\s+)(.*)"
 )
 
 # Media/file extensions we handle
@@ -36,6 +36,12 @@ MEDIA_EXTS = (
     "was",
 )
 
+IOS_SYSTEM_PREFIXES = (
+    "Messages and calls are end-to-end encrypted.",
+    "Your security code with ",
+    "I messaggi e le chiamate sono crittografati end-to-end.",
+    "Il tuo codice di sicurezza con ",
+)
 
 def parse_chat(chat_path):
     messages = []
@@ -43,15 +49,16 @@ def parse_chat(chat_path):
 
     with open(chat_path, "r", encoding="utf-8", errors="ignore") as f:
         for raw_line in f:
-            line = raw_line.rstrip("\n")
+            line = re.sub(r"[\u200e\u200f\u202a-\u202e\ufeff]", "", raw_line.rstrip("\r\n"))
 
             m = MESSAGE_RE.match(line)
             if m:
                 date_str, time_str, sender, text = m.groups()
+                clean_sender = "" if text.startswith(IOS_SYSTEM_PREFIXES) else sender.strip()
                 current = {
                     "date": date_str.strip(),
                     "time": time_str.strip(),
-                    "sender": sender.strip(),
+                    "sender": clean_sender,
                     "text": text,
                 }
                 messages.append(current)
@@ -652,7 +659,7 @@ def build_message_ids(messages):
 
 def render_message_html(msg, message_id, media_index, sender_classes, transcriptions=None):
     sender = msg["sender"]
-    sender_class = sender_classes.get(sender, "received")
+    sender_class = sender_classes.get(sender, "received") if sender else "system"
     text = msg["text"] or ""
 
     lower_text = text.lower()
@@ -677,7 +684,7 @@ def render_message_html(msg, message_id, media_index, sender_classes, transcript
         cur = 0
         for start, end, fname_lower in occurrences:
             if start > cur:
-                before = text[cur:start]
+                before = re.sub(r"<(?:attached|allegato):\s*$", "", text[cur:start]).strip()
                 if before:
                     parts.append(f"<span>{escape(before)}</span>")
 
@@ -739,7 +746,7 @@ def render_message_html(msg, message_id, media_index, sender_classes, transcript
             cur = end
 
         if cur < len(text):
-            after = text[cur:]
+            after = re.sub(r"^>\s*", "", text[cur:])
 
             # Remove typical WhatsApp attachment phrases
             after = after.replace("(arquivo anexado)", "").strip()
@@ -750,24 +757,41 @@ def render_message_html(msg, message_id, media_index, sender_classes, transcript
 
         content_html = "".join(parts)
 
-    timestamp = f"{escape(msg['date'])} {escape(msg['time'])}".strip()
+    timestamp = escape(msg["time"]).strip()
 
     return f"""
     <div class="message {sender_class}" id="{message_id}">
         <div class="bubble">
             <div class="meta">
                 <span class="sender">{escape(sender) if sender else "System"}</span>
-                <span class="meta-right">
-                    <span class="time">{timestamp}</span>
-                    <a class="permalink" href="#{message_id}" title="Link to this message">#</a>
-                </span>
+                <a class="permalink" href="#{message_id}" title="Link to this message">#</a>
             </div>
             <div class="text">
                 {content_html}
+                <span class="time">{timestamp}</span>
             </div>
         </div>
     </div>
     """
+
+MONTH_ABBR = {
+    1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr",
+    5: "May", 6: "Jun", 7: "Jul", 8: "Aug",
+    9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec",
+}
+
+
+def format_badge_date(date_str):
+    parts = date_str.strip().split("/")
+    if len(parts) == 3:
+        day, month, year = parts
+        if len(year) == 2:
+            year = "20" + year
+        try:
+            return f"{int(day)} {MONTH_ABBR[int(month)]} {year}"
+        except (ValueError, KeyError):
+            pass
+    return date_str
 
 
 def generate_html(messages, media_index, output_path, me_name=None, transcriptions=None):
@@ -788,7 +812,9 @@ def generate_html(messages, media_index, output_path, me_name=None, transcriptio
     .chat-header {
         background: #075E54;
         color: white;
-        padding: 12px 16px;
+        height: 48px;
+        box-sizing: border-box;
+        padding: 0 16px;
         font-weight: 500;
         display: flex;
         align-items: center;
@@ -817,7 +843,7 @@ def generate_html(messages, media_index, output_path, me_name=None, transcriptio
     }
     .bubble {
         max-width: 70%;
-        padding: 6px 8px;
+        padding: 6px 8px 8px 9px;
         border-radius: 8px;
         font-size: 14px;
         position: relative;
@@ -827,6 +853,43 @@ def generate_html(messages, media_index, output_path, me_name=None, transcriptio
     .message.sent .bubble {
         background: #dcf8c6;
     }
+    .message.system {
+        justify-content: center;
+    }
+    .message.system .bubble {
+        background: rgba(128, 128, 128, 0.18);
+        color: #4a555c;
+        text-align: center;
+        font-size: 12.5px;
+        max-width: 80%;
+        box-shadow: none;
+        border-radius: 10px;
+        padding: 6px 12px;
+    }
+    .message.system .meta {
+        justify-content: center;
+        gap: 8px;
+    }
+    .date-divider {
+        display: flex;
+        justify-content: center;
+        padding: 10px 0 8px;
+        position: sticky;
+        top: 48px;
+        z-index: 5;
+        pointer-events: none;
+    }
+    .date-badge {
+        background: rgba(225, 221, 214, 0.95);
+        backdrop-filter: blur(4px);
+        color: #4a555c;
+        font-size: 12px;
+        font-weight: 500;
+        padding: 4px 12px;
+        border-radius: 999px;
+        text-align: center;
+        box-shadow: 0 1px 1px rgba(0, 0, 0, 0.08);
+    }
     .meta {
         display: flex;
         justify-content: space-between;
@@ -834,11 +897,7 @@ def generate_html(messages, media_index, output_path, me_name=None, transcriptio
         font-size: 11px;
         color: #667781;
         margin-bottom: 4px;
-    }
-    .meta-right {
-        display: flex;
-        align-items: center;
-        gap: 6px;
+        gap: 8px;
     }
     .permalink {
         color: inherit;
@@ -850,9 +909,24 @@ def generate_html(messages, media_index, output_path, me_name=None, transcriptio
     .message:target .permalink {
         opacity: 1;
     }
+    .text {
+        display: flow-root;
+    }
     .text span {
         white-space: pre-wrap;
         word-wrap: break-word;
+    }
+    .text .time {
+        float: right;
+        font-size: 11px;
+        color: #667781;
+        margin: 10px 0 -4px 8px;
+        line-height: 1;
+    }
+    .message.system .text .time {
+        float: none;
+        display: inline-block;
+        margin: 0 0 0 6px;
     }
     .message:target .bubble {
         outline: 2px solid rgba(7, 94, 84, 0.35);
@@ -906,10 +980,25 @@ def generate_html(messages, media_index, output_path, me_name=None, transcriptio
     }
     """
 
-    messages_html = [
-        render_message_html(msg, message_id, media_index, sender_classes, transcriptions)
-        for msg, message_id in zip(messages, message_ids)
-    ]
+    messages_html = []
+    last_date = None
+    in_day_group = False
+    for msg, message_id in zip(messages, message_ids):
+        if msg["date"] and msg["date"] != last_date:
+            if in_day_group:
+                messages_html.append("    </div>")
+            last_date = msg["date"]
+            badge_text = escape(format_badge_date(last_date))
+            messages_html.append('    <div class="day-group">')
+            messages_html.append(
+                f'        <div class="date-divider"><span class="date-badge">{badge_text}</span></div>'
+            )
+            in_day_group = True
+        messages_html.append(
+            render_message_html(msg, message_id, media_index, sender_classes, transcriptions)
+        )
+    if in_day_group:
+        messages_html.append("    </div>")
     body_html = "\n".join(messages_html)
 
     title = f"WhatsApp chat - generated {datetime.now().strftime('%Y-%m-%d %H:%M')}"
