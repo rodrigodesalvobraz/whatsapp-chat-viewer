@@ -1,6 +1,6 @@
 # WhatsApp Chat Viewer
 
-> Forked from [rodrigodesalvobraz/whatsapp-chat-viewer](https://github.com/rodrigodesalvobraz/whatsapp-chat-viewer) with added support for iOS chat exports, system vs. regular message differentiation, sticky date badges, and bottom-right message timestamps.
+> Forked from [rodrigodesalvobraz/whatsapp-chat-viewer](https://github.com/rodrigodesalvobraz/whatsapp-chat-viewer) with added support for iOS chat exports, system vs. regular message differentiation, sticky date badges, and bottom-right message timestamps. *(Updates generated with AI assistance and manually reviewed and tested.)*
 
 WhatsApp's built-in chat export produces a plain text file and a folder of loose media files, which is hard to read and navigate. This tool generates a clean, browsable HTML page from that export, with embedded images, videos, audio players, PDFs, and optional audio transcriptions, and image and PDF descriptions. These latter elements are particularly useful for search and automatic processing of long conversations.
 
